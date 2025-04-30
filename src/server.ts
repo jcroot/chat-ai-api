@@ -71,10 +71,7 @@ app.post(
         });
       }
 
-      res.status(200).json({
-        message: "User registered successfully",
-        user: { userId, name, email },
-      });
+      res.status(200).json({ userId, name, email });
     } catch (error) {
       console.error("Error registering user:", error);
       res.status(500).json({ message: "Internal server error" });
@@ -110,10 +107,29 @@ app.post("/chat", async (req: Request, res: Response): Promise<any> => {
         .json({ message: "User not found, please register" });
     }
 
+    // Fetch users past messages for context
+    const chatHistory = await db
+      .select()
+      .from(chats)
+      .where(eq(chats.userId, userId))
+      .orderBy(chats.createdAt)
+      .limit(10);
+
+    // Format chat history for Open AI
+    const conversation: ChatCompletionMessageParam[] = chatHistory.flatMap(
+      (chat) => [
+        { role: 'user', content: chat.message },
+        { role: 'assistant', content: chat.reply },
+      ]
+    );
+
+    // Add latest user messages to the conversation
+    conversation.push({ role: 'user', content: message });
+
     // send the message to OpenAI GPT-4
     const gptResponse = await openai.chat.completions.create({
       model: "gpt-4",
-      messages: [{ role: "user", content: message }],
+      messages: conversation as ChatCompletionMessageParam[],
     });
     const gptMessage: string =
       gptResponse.choices[0].message?.content ?? "No response from AI";
@@ -136,10 +152,7 @@ app.post("/chat", async (req: Request, res: Response): Promise<any> => {
       user_id: "ai_bot",
     });
 
-    res.status(200).json({
-      message: "Message sent successfully",
-      response: gptMessage,
-    });
+    res.status(200).json({ reply: gptMessage });
   } catch (error) {
     console.error("Error creating chat channel:", error);
     res.status(500).json({ message: "Internal server error" });
@@ -147,32 +160,29 @@ app.post("/chat", async (req: Request, res: Response): Promise<any> => {
 });
 
 // Get chat history for a user
-app.post('/get-messages', async (req: Request, res: Response): Promise<any> => {
-    const { userId } = req.body;
+app.post("/get-messages", async (req: Request, res: Response): Promise<any> => {
+  const { userId } = req.body;
 
-    if (!userId) {
-        return res.status(400).json({ message: "User ID is required" });
+  if (!userId) {
+    return res.status(400).json({ message: "User ID is required" });
+  }
+
+  try {
+    const chatHistory = await db
+      .select()
+      .from(chats)
+      .where(eq(chats.userId, userId));
+    if (chatHistory.length === 0) {
+      res.status(404).json({ message: "No chat history found" });
     }
 
-    try {
-        const chatHistory = await db.select().from(chats).where(eq(chats.userId, userId));
-        if (chatHistory.length === 0) {
-            res.status(404).json({ message: "No chat history found" });
-        }
-
-        res.status(200).json({
-            message: "Chat history retrieved successfully",
-            chatHistory: chatHistory
-        });
-        
-    } catch (error) {
-        console.error("Error fetching messages:", error);
-        res.status(500).json({ message: "Internal server error" });
-    }
-    // Fetch messages from the database
-    
+    res.status(200).json({ messages: chatHistory });
+  } catch (error) {
+    console.error("Error fetching messages:", error);
+    res.status(500).json({ message: "Internal server error" });
+  }
+  // Fetch messages from the database
 });
-
 
 const PORT = process.env.PORT || 3000;
 
